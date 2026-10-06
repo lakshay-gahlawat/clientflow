@@ -9,35 +9,36 @@ from app.api.v1.router import api_router
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,  # required for the httpOnly refresh cookie
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
+# 1. Custom Security Headers Middleware (Added FIRST so CORS runs before it)
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    """
-    Baseline HTTP security headers, applied to every response.
-    Deliberately NOT including Content-Security-Policy here — the
-    default /docs (Swagger UI) loads its JS/CSS from a CDN, and a
-    correct CSP needs to be scoped around that deliberately rather than
-    guessed at as a side effect of this fix. Add one separately if /docs
-    is disabled or CSP is specifically scoped for it.
-    """
+    # Pass preflight OPTIONS requests directly through without interception
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     if settings.ENVIRONMENT != "development":
-        # Only meaningful over HTTPS — harmless but pointless over plain
-        # HTTP, so scoped to non-dev the same way the cookie Secure flag is.
         response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
     return response
 
+
+# 2. Parse CORS Origins safely to ensure it is always a List[str]
+if isinstance(settings.CORS_ORIGINS, str):
+    cors_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
+else:
+    cors_origins = settings.CORS_ORIGINS
+
+# 3. CORS Middleware (Added LAST so it wraps all requests FIRST)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,  # required for the httpOnly refresh cookie
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(api_router, prefix="/api/v1")
 
