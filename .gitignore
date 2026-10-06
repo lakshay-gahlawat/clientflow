@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Env
+.env
+# NOTE: .env.test is intentionally NOT ignored — it holds dummy/local-only
+# test values (see backend/.env.test) and needs to be committed so the
+# test suite is reproducible without manual environment setup.
+
+# Node
+node_modules/
+dist/
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Generated
+frontend/tsconfig.tsbuildinfo
+backend/celerybeat-schedule
+backend/celerybeat-schedule.db

@@ -1,0 +1,24 @@
+# Production frontend image — multi-stage: build static assets with Vite,
+# then serve them with nginx. No Node runtime, no dev server, in the
+# final image. /api is reverse-proxied to the API so auth cookies stay
+# same-origin (required on Render, where *.onrender.com is cross-site).
+FROM node:20-slim AS build
+
+WORKDIR /app
+COPY package.json ./
+RUN npm install
+COPY . .
+# Relative /api/v1 is same-origin via nginx — do not bake a second Render
+# hostname here or refresh cookies will not restore the session.
+ARG VITE_API_BASE_URL=/api/v1
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+RUN npm run build
+
+FROM nginx:1.27-alpine
+RUN apk add --no-cache gettext
+COPY --from=build /app/dist /usr/share/nginx/html
+COPY nginx.render.conf.template /etc/nginx/templates/default.conf.template
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+EXPOSE 80
+CMD ["/docker-entrypoint.sh"]
