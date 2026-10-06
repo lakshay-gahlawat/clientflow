@@ -2,9 +2,15 @@ import axios, { AxiosError, type InternalAxiosRequestConfig } from "axios";
 import { getCookie } from "../lib/cookies";
 import type { AccessTokenResponse, ApiErrorBody, User } from "./types";
 
+const baseURL = import.meta.env.VITE_API_BASE_URL;
+if (!baseURL) {
+  console.error("VITE_API_BASE_URL is not set - rebuild after setting it.");
+}
+
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
+  baseURL,
   withCredentials: true, // sends the httpOnly refresh cookie automatically
+  timeout: 60_000, // Render free tier can take ~50s to wake up
 });
 
 // --- In-memory access-token store -------------------------------------
@@ -143,7 +149,10 @@ export function extractErrorMessage(error: unknown, fallback = "Something went w
     if (Array.isArray(body?.detail) && body.detail.length > 0) {
       return body.detail.map((d) => d.msg).join("; ");
     }
-    if (error.response?.status === 0 || error.code === "ERR_NETWORK") {
+        if (error.code === "ECONNABORTED") {
+      return "The server is waking up - please try again in a moment.";
+    }
+    if (!error.response) {
       return "Can't reach the server — check your connection and try again.";
     }
   }

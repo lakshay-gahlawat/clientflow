@@ -4,7 +4,7 @@ No secrets are hardcoded here — see .env.example for the required keys.
 """
 import json
 
-from pydantic import field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,17 +34,17 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
     # CORS
-    CORS_ORIGINS: list[str] = ["http://localhost:5173"]
+    # CORS - read as a plain string, then turned into a list by the property below
+    CORS_ORIGINS_RAW: str = Field(
+        default="http://localhost:5173",
+        validation_alias=AliasChoices("CORS_ORIGINS", "ALLOWED_ORIGINS"),
+    )
 
-    @field_validator("CORS_ORIGINS", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, value):
-        if isinstance(value, str):
-            text = value.strip()
-            if text.startswith("["):
-                return json.loads(text)
-            return [origin.strip() for origin in text.split(",") if origin.strip()]
-        return value
+    @property
+    def CORS_ORIGINS(self) -> list[str]:
+        text = self.CORS_ORIGINS_RAW.strip()
+        items = json.loads(text) if text.startswith("[") else text.split(",")
+        return [o.strip().rstrip("/") for o in items if o.strip()]
 
     # Stripe (filled in during Phase 8)
     STRIPE_SECRET_KEY: str = ""
