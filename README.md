@@ -5,6 +5,20 @@ demonstrating a complete, tested, production-shaped web application:
 FastAPI + PostgreSQL backend, React frontend, async background
 processing, and Stripe billing.
 
+## Live demo
+
+| | Link |
+|---|---|
+| **Live app** | https://clientflow-plum.vercel.app |
+| **API** | https://clientflow-backend-qdv4.onrender.com |
+| **API docs (Swagger)** | https://clientflow-backend-qdv4.onrender.com/docs |
+| **Health check** | https://clientflow-backend-qdv4.onrender.com/health |
+
+> **Note:** the backend runs on free-tier hosting. If the app has been idle,
+> the first request can take up to a minute while the server wakes up.
+> Later requests are fast.
+
+
 ## Features
 
 - **Authentication** — registration, login, short-lived JWT access
@@ -45,14 +59,30 @@ Backend (FastAPI) ── routes → services → repositories → PostgreSQL
 Full diagrams (system architecture, ERD, auth flow, Celery/Stripe
 sequence) are in [`docs/architecture-diagram.md`](docs/architecture-diagram.md).
 
+### Production topology
+
+```
+Browser ──► Vercel (static React app)
+              │
+              │  /api/*  (rewrite / proxy, see frontend/vercel.json)
+              ▼
+         Render (FastAPI) ──► Neon (PostgreSQL)
+                          └─► Redis
+```
+
+The browser only ever talks to one origin (the Vercel domain). Vercel
+forwards `/api/*` to the backend, so there is no cross-site CORS and the
+httpOnly refresh cookie and CSRF cookie behave as first-party cookies.
+
 ## Tech stack
 
 **Backend:** FastAPI, SQLAlchemy 2.x, Alembic, PostgreSQL, Redis, Celery
 (worker + Beat), Stripe SDK, python-jose, bcrypt.
 **Frontend:** React, TypeScript, Vite, Tailwind CSS, React Router,
 TanStack Query, Axios.
-**Infra:** Docker Compose (dev and production configurations), nginx
-(production frontend serving).
+**Infra:** Vercel (frontend), Render (API), Neon (PostgreSQL),
+Docker Compose (dev and production configurations), nginx (production
+frontend serving in the Compose setup).
 
 ## Local development setup
 
@@ -72,6 +102,29 @@ fresh clone doesn't need a separate manual migration step.
 - API: http://localhost:8000 (interactive docs at `/docs`)
 - Frontend: http://localhost:5173
 - Health check: `GET /health`
+
+## Environment variables
+
+### Backend (Render / `backend/.env`)
+
+| Variable | Example | Notes |
+|---|---|---|
+| `ENVIRONMENT` | `production` | Enables `Secure` cookies and HSTS. Use `development` locally. |
+| `DATABASE_URL` | `postgresql://user:pass@host/db?sslmode=require` | For Neon, use the pooled connection string and keep the database in the **same region** as the API. Remove `&channel_binding=require` if present. |
+| `REDIS_URL` | `redis://...` | Used for rate limiting and Celery. |
+| `JWT_SECRET_KEY` | _random 64+ chars_ | Generate a fresh one for production. |
+| `CORS_ORIGINS` | `["https://clientflow-plum.vercel.app"]` | JSON array **or** comma-separated list. No trailing slash. |
+| `STRIPE_SECRET_KEY` | `sk_test_...` | Optional — billing. |
+| `STRIPE_PRICE_ID_PRO` | `price_...` | Optional — billing. |
+| `STRIPE_WEBHOOK_SECRET` | `whsec_...` | Optional — billing. |
+| `RESEND_API_KEY` | `re_...` | Optional — reminder emails. |
+| `EMAIL_FROM` | `ClientFlow <noreply@yourdomain.com>` | Must be on a verified Resend domain. |
+
+### Frontend (Vercel / `frontend/.env`)
+
+| Variable | Value | Notes |
+|---|---|---|
+| `VITE_API_BASE_URL` | `/api/v1` | Same-origin path; Vercel proxies it to the API. Vite reads this at **build time**, so redeploy after changing it. |
 
 ## Database migrations
 
@@ -154,35 +207,73 @@ npx vite build           # production build
    [Stripe CLI](https://stripe.com/docs/stripe-cli) (`stripe listen
    --forward-to localhost:8000/api/v1/billing/webhook`) to get a local
    webhook secret; in production, register the real endpoint URL
-   (`https://your-api-domain/api/v1/billing/webhook`) in the Stripe
-   Dashboard and use the signing secret it gives you.
-5. **Manual verification still required**: this sandbox environment's
-   network egress cannot reach `api.stripe.com`, so checkout-session
-   creation and the full checkout → webhook round trip have not been
-   exercised against real Stripe infrastructure. Webhook signature
-   verification, idempotency, and event-handling logic ARE fully tested
-   locally (see `backend/app/tests/test_billing.py`) using real
-   HMAC-signed payloads constructed exactly as Stripe signs them — but
-   confirm the live flow manually with Stripe test-mode keys before
-   relying on it in production.
+   (`https://clientflow-plum.vercel.app/api/v1/billing/webhook`) in the
+   Stripe Dashboard and use the signing secret it gives you.
+5. **Manual verification recommended**: webhook signature verification,
+   idempotency, and event-handling logic are fully tested locally (see
+   `backend/app/tests/test_billing.py`) using real HMAC-signed payloads
+   constructed exactly as Stripe signs them. The full checkout → webhook
+   round trip against live Stripe infrastructure should still be
+   confirmed manually with Stripe test-mode keys before relying on it in
+   production.
 
 ## Email (Resend) setup
 
 1. Create a [Resend account](https://resend.com), verify a sending
    domain, and generate an API key.
 2. Set `RESEND_API_KEY` and `EMAIL_FROM` (must be on the verified domain).
-3. **Manual verification required** for the same reason as Stripe: this
-   environment's network egress cannot reach `api.resend.com`. The
-   send/failure/retry logic is fully tested locally with the HTTP call
-   mocked (`backend/app/tests/test_worker_tasks.py`); during
-   implementation, an unmocked attempt against the real endpoint was
-   blocked by this sandbox's network policy, which incidentally
-   exercised and confirmed the retry-and-revert-to-PENDING failure path
-   for real. Confirm actual email delivery manually once deployed.
+3. **Manual verification recommended**: the send/failure/retry logic is
+   fully tested locally with the HTTP call mocked
+   (`backend/app/tests/test_worker_tasks.py`). Confirm actual email
+   delivery manually once deployed. Reminders also require the Celery
+   worker and Beat processes to be running.
 
 ## Deployment
 
-### Render (live)
+### Option A: Vercel (frontend) + Render (API) + Neon (database) — current live setup
+
+**1. Database (Neon)**
+- Create a Neon project in the **same region as your Render service**
+  (for example Singapore for both). A region mismatch adds a long round
+  trip to every query and makes the whole app feel slow.
+- Copy the **pooled** connection string and remove
+  `&channel_binding=require` if present. Keep `?sslmode=require`.
+
+**2. Backend (Render)**
+- Create a Web Service from this repo with the root directory set to
+  `backend`, using the Dockerfile (it runs `alembic upgrade head` before
+  starting).
+- Set the backend environment variables from the table above, including
+  `ENVIRONMENT=production`, `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET_KEY`
+  and `CORS_ORIGINS`.
+- Verify: `https://<your-api>.onrender.com/health` returns
+  `{"status":"ok", ...}`.
+
+**3. Frontend (Vercel)**
+- Import the repo and set **Root Directory** to `frontend`
+  (Framework: Vite, Build: `npm run build`, Output: `dist`).
+- Add the environment variable `VITE_API_BASE_URL=/api/v1`.
+- Make sure `frontend/vercel.json` exists and points at your API:
+
+```json
+  {
+    "rewrites": [
+      { "source": "/api/:path*", "destination": "https://<your-api>.onrender.com/api/:path*" },
+      { "source": "/((?!api/).*)", "destination": "/index.html" }
+    ]
+  }
+```
+
+  The first rule proxies API calls to Render; the second keeps React
+  Router pages working on refresh.
+- Verify: `https://<your-app>.vercel.app/api/v1/auth/me` should return
+  `{"detail":"Not authenticated"}`.
+
+**4. Finish**
+- Set `CORS_ORIGINS` on Render to your exact Vercel URL (no trailing
+  slash), then redeploy.
+
+### Option B: Render Blueprint
 
 This repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec) in `render.yaml`.
 
@@ -194,7 +285,7 @@ This repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec) 
 
 Postgres and Redis on Render are paid add-ons; web/worker services use the Starter plan in the blueprint.
 
-### Docker Compose (self-hosted)
+### Option C: Docker Compose (self-hosted)
 
 ```bash
 cp .env.example .env    # fill in real production values — see comments in the file
@@ -218,6 +309,18 @@ Before going live, also:
 - Set real, non-wildcard `CORS_ORIGINS`.
 - Generate a fresh `JWT_SECRET_KEY` — never reuse the dev value.
 
+## Troubleshooting
+
+| Symptom | Likely cause and fix |
+|---|---|
+| "Can't reach the server" | CORS or network failure. Check that `CORS_ORIGINS` on the API exactly matches the frontend origin (no trailing slash), and that the API is awake (`/health`). |
+| API crashes on startup with a settings error | `CORS_ORIGINS` format. Use a JSON array or a comma-separated list, and make sure `DATABASE_URL`, `REDIS_URL` and `JWT_SECRET_KEY` are all set. |
+| Vercel shows its own "This page doesn't exist" for `/api/...` | `vercel.json` isn't in the deployed build. Confirm it is in `frontend/`, that Vercel's Root Directory is `frontend`, and that the latest commit was deployed (check the deployment's Source tab). |
+| Login works but you're logged out on reload | Cookies not first-party. Use the Vercel `/api` proxy (`VITE_API_BASE_URL=/api/v1`) and set `ENVIRONMENT=production`. |
+| Every request takes 2–3 seconds | API and database in different regions. Put them in the same region and use the pooled Neon connection string. |
+| First request after idle takes up to a minute | Free-tier cold start on Render. Use a paid plan or an uptime monitor pinging `/health`. |
+| Changed `VITE_API_BASE_URL` but nothing happened | Vite bakes env vars in at build time. Trigger a fresh deployment. |
+
 ## Key engineering decisions
 
 - **Row-level multi-tenancy, not schema-per-tenant** — `workspace_id`
@@ -240,3 +343,7 @@ Before going live, also:
   safe under concurrent/duplicate delivery (a single conditional
   `UPDATE ... WHERE status = X`, or an idempotency-key table), not a
   read-then-write race.
+- **Same-origin API via a proxy** — the frontend calls `/api/v1/...` on
+  its own domain and the host forwards it to the backend, which avoids
+  cross-site cookie and CORS problems for the httpOnly refresh cookie
+  and CSRF double-submit flow.
