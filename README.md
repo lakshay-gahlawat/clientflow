@@ -10,9 +10,9 @@ processing, and Stripe billing.
 | | Link |
 |---|---|
 | **Live app** | https://clientflow-plum.vercel.app |
-| **API** | https://clientflow-backend-qdv4.onrender.com |
-| **API docs (Swagger)** | https://clientflow-backend-qdv4.onrender.com/docs |
-| **Health check** | https://clientflow-backend-qdv4.onrender.com/health |
+| **API** | https://clientflow-d2gh.onrender.com |
+| **API docs (Swagger)** | https://clientflow-d2gh.onrender.com/docs |
+| **Health check** | https://clientflow-d2gh.onrender.com/health |
 
 > **Note:** the backend runs on free-tier hosting. If the app has been idle,
 > the first request can take up to a minute while the server wakes up.
